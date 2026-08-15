@@ -1,0 +1,115 @@
+{
+  "name": "opencode-v2",
+  "displayName": "OpenCode Beta",
+  "description": "OpenCode VSCode extension",
+  "version": "0.1.2",
+  "publisher": "sst-dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anomalyco/opencode"
+  },
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#000000",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:opencode-v2.openPanel",
+    "onCommand:opencode-v2.refreshPanel",
+    "onView:opencode-v2.panel"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "opencode-v2",
+          "title": "OpenCode",
+          "icon": "images/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "opencode-v2": [
+        {
+          "id": "opencode-v2.panel",
+          "name": "OpenCode",
+          "type": "webview",
+          "when": "true"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "opencode-v2.openPanel",
+        "title": "Open OpenCode Assistant",
+        "icon": {
+          "light": "images/button-dark.svg",
+          "dark": "images/button-light.svg"
+        }
+      },
+      {
+        "command": "opencode-v2.refreshPanel",
+        "title": "Refresh Panel",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "opencode-v2.openPanel",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "opencode-v2.refreshPanel",
+          "when": "view == opencode-v2.panel",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "opencode-v2.openPanel",
+        "title": "Open OpenCode Assistant",
+        "key": "cmd+shift+escape",
+        "mac": "cmd+shift+escape",
+        "win": "ctrl+escape",
+        "linux": "ctrl+escape"
+      }
+    ],
+    "configuration": {
+      "title": "OpenCode",
+      "properties": {
+        "opencode-v2.path": {
+          "type": "string",
+          "default": "opencode",
+          "description": "Path to the opencode binary (default: opencode on PATH)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "vscode:prepublish": "bun run package",
+    "compile": "bun run check-types && node esbuild.js",
+    "check-types": "tsc --noEmit",
+    "package": "bun run check-types && node esbuild.js --production",
+    "vsce-package": "bun run package && vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "20.x",
+    "@types/vscode": "^1.94.0",
+    "esbuild": "^0.25.3",
+    "typescript": "^5.8.3"
+  }
+}
