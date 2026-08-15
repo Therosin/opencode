@@ -23,7 +23,6 @@ jobs:
       matrix:
         platform:
           - ubuntu-latest
-          - macos-13
           - macos-15
     runs-on: ${{ matrix.platform }}
     steps:
