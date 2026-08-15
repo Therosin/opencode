@@ -1,12 +1,12 @@
 import * as net from "node:net"
-import { basename } from "node:path"
+import { existsSync } from "node:fs"
+import { basename, extname } from "node:path"
 import { spawn, type ChildProcess } from "node:child_process"
 import * as vscode from "vscode"
-
 const VIEW_CONTAINER = "workbench.view.extension.opencode-v2"
 const READY_TIMEOUT_MS = 15_000
 const WORKSPACE_WAIT_TIMEOUT_MS = 5_000
-const HEALTH_PATHS = ["/api/health", "/health", "/app/providers"]
+const HEALTH_PATHS = ["/global/health", "/api/health", "/health", "/app/providers"]
 
 // Prefer a fixed port so the webview origin (and its localStorage) stays stable
 // across launches; fall back to an ephemeral port only when the preferred one
@@ -35,6 +35,33 @@ async function findFreePort(): Promise<number> {
       server.close(() => resolve(address.port))
     })
   })
+}
+
+// Resolves the configured command to a directly spawnable executable on
+// Windows, preferring a real .exe over .cmd/.bat shims so the workspace-
+// configurable path is never interpreted by a shell (command injection).
+async function resolveCommand(command: string): Promise<string> {
+  if (process.platform !== "win32") return command
+  const ext = extname(command).toLowerCase()
+  if (ext === ".cmd" || ext === ".bat") {
+    const exe = command.replace(/\.(cmd|bat)$/i, ".exe")
+    if (existsSync(exe)) return exe
+  }
+  if (command.includes("\\") || command.includes("/") || ext !== "") return command
+
+  const shims = await new Promise<string[]>((resolve) => {
+    const child = spawn("where.exe", [command], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] })
+    let out = ""
+    child.stdout?.on("data", (chunk: Buffer) => (out += chunk.toString()))
+    child.on("close", () => resolve(out.split(/\r?\n/).filter(Boolean)))
+    child.on("error", () => resolve([]))
+  })
+  const exe = shims.find((entry) => extname(entry).toLowerCase() === ".exe")
+  if (exe) return exe
+  const shim = shims[0]
+  if (!shim) return command
+  const sibling = shim.replace(/\.(cmd|bat)$/i, ".exe")
+  return existsSync(sibling) ? sibling : shim
 }
 
 async function createSession(url: string, title?: string): Promise<{ id: string } | undefined> {
@@ -72,6 +99,7 @@ class ServerManager implements vscode.Disposable {
   private sessionURL?: string
   private sessionPath?: string
   private lastStderr = ""
+  private startPromise?: { workspacePath: string; promise: Promise<string> }
 
   constructor(output: vscode.OutputChannel) {
     this.output = output
@@ -84,6 +112,17 @@ class ServerManager implements vscode.Disposable {
   async start(workspacePath: string): Promise<string> {
     if (this.url && this.child && this.child.exitCode === null && this.workspacePath === workspacePath) return this.url
     if (this.child && this.child.exitCode === null) this.killChild()
+    if (this.startPromise?.workspacePath === workspacePath) return this.startPromise.promise
+    const promise = this.launchWithRetry(workspacePath)
+    this.startPromise = { workspacePath, promise }
+    try {
+      return await promise
+    } finally {
+      if (this.startPromise?.promise === promise) this.startPromise = undefined
+    }
+  }
+
+  private async launchWithRetry(workspacePath: string): Promise<string> {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         return await this.launch(workspacePath)
@@ -100,7 +139,8 @@ class ServerManager implements vscode.Disposable {
 
   private async launch(workspacePath: string): Promise<string> {
     const port = await findFreePort()
-    const command = vscode.workspace.getConfiguration("opencode-v2").get<string>("path") ?? "opencode"
+    const configured = vscode.workspace.getConfiguration("opencode-v2").get<string>("path")
+    const command = await resolveCommand(configured ?? "opencode")
     const args = ["serve", "--hostname", "127.0.0.1", "--port", String(port)]
     const env = {
       ...process.env,
@@ -117,16 +157,37 @@ class ServerManager implements vscode.Disposable {
     this.lastStderr = ""
     this.url = undefined
 
-    const child = spawn(command, args, {
-      cwd: workspacePath,
-      env,
-      shell: process.platform === "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    })
+    let child: ChildProcess
+    if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+      // Residual .cmd/.bat shim without a sibling .exe: run it through cmd.exe
+      // with the command path quoted so a workspace-configured path cannot
+      // inject additional commands. Never use shell: true for the same reason.
+      const cmdLine = `"${command}" ${args.map((arg) => (arg.includes(" ") ? `"${arg}"` : arg)).join(" ")}`
+      child = spawn("cmd.exe", ["/d", "/s", "/c", cmdLine], {
+        cwd: workspacePath,
+        env,
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+    } else {
+      child = spawn(command, args, {
+        cwd: workspacePath,
+        env,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      })
+    }
     this.child = child
     this.workspacePath = workspacePath
 
+    let spawnError: Error | undefined
+    // The child must always have an error listener attached; otherwise a
+    // failed spawn (e.g. ENOENT for a missing binary) crashes the host.
+    child.on("error", (error) => {
+      spawnError = error
+    })
     child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString()
       this.lastStderr = (this.lastStderr + text).slice(-2000)
@@ -137,12 +198,15 @@ class ServerManager implements vscode.Disposable {
       this.output.appendLine(`Server exited (code=${code}, signal=${signal})`)
       if (this.child === child) {
         this.url = undefined
+        this.workspacePath = undefined
+        this.sessionURL = undefined
+        this.sessionPath = undefined
         this.child = undefined
       }
     })
 
     this.url = `http://127.0.0.1:${port}`
-    await this.waitForReady(this.url, child)
+    await this.waitForReady(this.url, child, () => spawnError)
     return this.url
   }
 
@@ -160,10 +224,11 @@ class ServerManager implements vscode.Disposable {
     return this.sessionURL
   }
 
-  private async waitForReady(url: string, child: ChildProcess): Promise<void> {
+  private async waitForReady(url: string, child: ChildProcess, spawnError?: () => Error | undefined): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS
     let lastReason = "no response"
     while (Date.now() < deadline) {
+      if (spawnError?.()) throw spawnError()
       if (child.exitCode !== null) {
         const stderr = this.lastStderr.trim()
         throw new Error(`Server exited with code ${child.exitCode}${stderr ? `: ${stderr.split("\n").at(-1)}` : ""}`)
@@ -278,7 +343,7 @@ function errorHtml(message: string): string {
         <h2>OpenCode Assistant</h2>
         <p>Failed to load interface.</p>
         <p class="detail">${message}</p>
-        <p><button onclick="location.reload()">Retry</button></p>
+        <p><button onclick="acquireVsCodeApi().postMessage({ command: 'retry' })">Retry</button></p>
     </div>
 </body>
 </html>`
@@ -297,6 +362,12 @@ class OpenCodePanelProvider implements vscode.WebviewViewProvider {
   async resolveWebviewView(view: vscode.WebviewView) {
     this.view = view
     view.webview.options = { enableScripts: true }
+    // The error page's Retry button posts a message here so the provider can
+    // re-run the full render path (server start + session resolution) instead
+    // of merely reloading the static error document.
+    view.webview.onDidReceiveMessage((message) => {
+      if (message?.command === "retry") void this.render(view.webview)
+    })
     await this.render(view.webview)
   }
 
