@@ -1,0 +1,104 @@
+name: fork-ci
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+    tags:
+      - "v*"
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - ubuntu-latest
+          - windows-latest
+          - macos-13
+          - macos-15
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build native binary
+        run: bun ./packages/opencode/script/build.ts --single
+        env:
+          OPENCODE_VERSION: 0.0.0-${{ github.sha }}
+          OPENCODE_CHANNEL: dev
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: opencode-cli-${{ matrix.platform }}
+          path: packages/opencode/dist/opencode-*/
+          if-no-files-found: error
+
+  build-vsix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Install vsce
+        run: bun install -g @vscode/vsce
+
+      - name: Install extension dependencies
+        run: bun install
+        working-directory: ./sdks/vscode-v2
+
+      - name: Package vsix
+        run: bun run vsce-package
+        working-directory: ./sdks/vscode-v2
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: opencode-v2-vsix
+          path: sdks/vscode-v2/*.vsix
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-cli, build-vsix]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: opencode-cli-*
+          path: /tmp/cli
+          merge-multiple: true
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: opencode-v2-vsix
+          path: /tmp/vsix
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes || true
+
+      - name: Package platform archives
+        run: |
+          for dir in /tmp/cli/opencode-*/bin; do
+            name=$(basename "$(dirname "$dir")")
+            (cd "$dir" && zip -r "/tmp/$name.zip" *)
+          done
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber /tmp/*.zip /tmp/vsix/*.vsix
