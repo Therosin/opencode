@@ -38,10 +38,8 @@ async function findFreePort(): Promise<number> {
 }
 
 // Resolves the configured command to a directly spawnable executable on
-// Windows. `where.exe` returns matches in PATH order; respect that order so a
-// later entry (e.g. a stale bun shim) cannot shadow an earlier working one.
-// .cmd/.bat shims are returned as-is and run through cmd.exe with a quoted
-// command line, so a workspace-configured path is never interpreted by a shell.
+// Windows, preferring a real .exe over .cmd/.bat shims so the workspace-
+// configurable path is never interpreted by a shell (command injection).
 async function resolveCommand(command: string): Promise<string> {
   if (process.platform !== "win32") return command
   const ext = extname(command).toLowerCase()
@@ -58,16 +56,12 @@ async function resolveCommand(command: string): Promise<string> {
     child.on("close", () => resolve(out.split(/\r?\n/).filter(Boolean)))
     child.on("error", () => resolve([]))
   })
-  for (const entry of shims) {
-    const entryExt = extname(entry).toLowerCase()
-    if (entryExt !== ".exe" && entryExt !== ".cmd" && entryExt !== ".bat") continue
-    if (entryExt === ".cmd" || entryExt === ".bat") {
-      const sibling = entry.replace(/\.(cmd|bat)$/i, ".exe")
-      if (existsSync(sibling)) return sibling
-    }
-    return entry
-  }
-  return shims[0] ?? command
+  const exe = shims.find((entry) => extname(entry).toLowerCase() === ".exe")
+  if (exe) return exe
+  const shim = shims[0]
+  if (!shim) return command
+  const sibling = shim.replace(/\.(cmd|bat)$/i, ".exe")
+  return existsSync(sibling) ? sibling : shim
 }
 
 async function createSession(url: string, title?: string): Promise<{ id: string } | undefined> {
