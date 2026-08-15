@@ -59,7 +59,21 @@ runs:
         # e.g. ./patches/ for standard-openapi
         # https://github.com/oven-sh/bun/issues/28147
         if [ "$RUNNER_OS" = "Windows" ]; then
-          bun install --linker hoisted ${{ inputs.install-flags }}
+          # bun publishes patched packages to its cache with a single Windows
+          # rename() that fails with ENOTEMPTY when a _patch_hash= entry already
+          # exists; upstream has no retry in this path yet
+          # (https://github.com/oven-sh/bun/issues/11250, fix in PR #35568).
+          # Isolate the cache per-run and retry after clearing it.
+          export BUN_INSTALL_CACHE_DIR="$RUNNER_TEMP/bun-cache"
+          for attempt in 1 2 3 4 5; do
+            if bun install --linker hoisted ${{ inputs.install-flags }}; then
+              exit 0
+            fi
+            echo "bun install failed (attempt $attempt/5), clearing cache and retrying..."
+            bun pm cache rm >/dev/null 2>&1 || true
+            sleep 5
+          done
+          exit 1
         else
           bun install ${{ inputs.install-flags }}
         fi
