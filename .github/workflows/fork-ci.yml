@@ -23,7 +23,6 @@ jobs:
       matrix:
         platform:
           - ubuntu-latest
-          - windows-latest
           - macos-13
           - macos-15
     runs-on: ${{ matrix.platform }}
@@ -42,6 +41,29 @@ jobs:
         with:
           name: opencode-cli-${{ matrix.platform }}
           path: packages/opencode/dist/opencode-*/
+          if-no-files-found: error
+
+  build-cli-windows:
+    # Cross-compile the Windows CLI from Linux, mirroring upstream publish.yml.
+    # Native Windows runners hit bun's patched-package cache rename bug
+    # (ENOTEMPTY, oven-sh/bun#11250, no retry until PR #35568) and node-gyp
+    # resolution failures inside build.ts, so build all targets here instead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build Windows binary
+        run: bun ./packages/opencode/script/build.ts
+        env:
+          OPENCODE_VERSION: 0.0.0-${{ github.sha }}
+          OPENCODE_CHANNEL: dev
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: opencode-cli-windows
+          path: packages/opencode/dist/opencode-windows-*/
           if-no-files-found: error
 
   build-vsix:
@@ -75,46 +97,3 @@ jobs:
           name: opencode-v2-vsix
           path: sdks/vscode-v2/*.vsix
           if-no-files-found: error
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [build-cli, build-vsix]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: opencode-cli-*
-          path: /tmp/cli
-          merge-multiple: true
-
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: opencode-v2-vsix
-          path: /tmp/vsix
-          merge-multiple: true
-          if-no-files-found: ignore
-
-      - name: Create release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes || true
-
-      - name: Package platform archives
-        run: |
-          for dir in /tmp/cli/opencode-*/bin; do
-            name=$(basename "$(dirname "$dir")")
-            (cd "$dir" && zip -r "/tmp/$name.zip" *)
-          done
-
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          assets=(/tmp/*.zip)
-          if compgen -G "/tmp/vsix/*.vsix" > /dev/null; then
-            assets+=($(ls /tmp/vsix/*.vsix))
-          fi
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
