@@ -539,6 +539,16 @@ export default function LegacyLayout(props: ParentProps) {
   const [autoselecting] = createResource(async () => {
     await ready.promise
     await layout.ready.promise
+
+    // When booting at a directory route (deep link / extension panel), seed the
+    // opened-projects store so the project selector resolves the current folder
+    // instead of falling back to "New project".
+    const seeded = initialDirectory
+    if (seeded) {
+      layout.projects.open(seeded)
+      server.projects.touch(projectRoot(seeded))
+    }
+
     if (!untrack(() => state.autoselect)) return
 
     const list = layout.projects.list()

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- O (outer 12×16, inner 6×10) -->
+  <path fill="currentColor" fill-rule="evenodd" d="M1 4h12v16H1V4Zm3 3v10h6V7H4Z"/>
+  <!-- C (left bar 3px; top/bottom bars extend to the right edge) -->
+  <rect x="15" y="4" width="3" height="16" fill="currentColor"/>
+  <rect x="15" y="4" width="9" height="3" fill="currentColor"/>
+  <rect x="15" y="17" width="9" height="3" fill="currentColor"/>
+</svg>
