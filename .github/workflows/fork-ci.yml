@@ -42,6 +42,9 @@ jobs:
           if-no-files-found: error
 
   build-vsix:
+    # sdks/vscode-v2 only exists once the extension PR lands on the default
+    # branch; skip until then so dev pushes don't fail on a missing directory.
+    if: hashFiles('sdks/vscode-v2/package.json') != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
@@ -83,6 +86,7 @@ jobs:
           pattern: opencode-v2-vsix
           path: /tmp/vsix
           merge-multiple: true
+          if-no-files-found: ignore
 
       - name: Create release
         env:
@@ -101,4 +105,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber /tmp/*.zip /tmp/vsix/*.vsix
+          assets=(/tmp/*.zip)
+          if compgen -G "/tmp/vsix/*.vsix" > /dev/null; then
+            assets+=($(ls /tmp/vsix/*.vsix))
+          fi
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
