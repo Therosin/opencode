@@ -46,26 +46,31 @@ jobs:
 
   build-vsix:
     # sdks/vscode-v2 only exists once the extension PR lands on the default
-    # branch; skip until then so dev pushes don't fail on a missing directory.
-    if: hashFiles('sdks/vscode-v2/package.json') != ''
+    # branch; skip steps until then so dev pushes don't fail on a missing
+    # directory. hashFiles is only available at step level, not job level.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
 
       - uses: ./.github/actions/setup-bun
+        if: hashFiles('sdks/vscode-v2/package.json') != ''
 
       - name: Install vsce
+        if: hashFiles('sdks/vscode-v2/package.json') != ''
         run: bun install -g @vscode/vsce
 
       - name: Install extension dependencies
+        if: hashFiles('sdks/vscode-v2/package.json') != ''
         run: bun install
         working-directory: ./sdks/vscode-v2
 
       - name: Package vsix
+        if: hashFiles('sdks/vscode-v2/package.json') != ''
         run: bun run vsce-package
         working-directory: ./sdks/vscode-v2
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: hashFiles('sdks/vscode-v2/package.json') != ''
         with:
           name: opencode-v2-vsix
           path: sdks/vscode-v2/*.vsix
